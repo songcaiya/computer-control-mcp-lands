@@ -26,6 +26,12 @@ from fuzzywuzzy import fuzz, process
 from rapidocr_onnxruntime import RapidOCR
 import cv2
 
+# Windows API imports for capturing inactive windows
+if os.name == "nt":  # Windows
+    import ctypes
+from ctypes import wintypes
+import numpy as np
+from PIL import Image as PILImage
 
 DEBUG = True  # Set to False in production
 RELOAD_ENABLED = True  # Set to False to disable auto-reload
@@ -37,6 +43,19 @@ mcp = FastMCP("ComputerControlMCP")
 def log(message: str) -> None:
     """Log a message to stderr."""
     print(f"STDOUT: {message}", file=sys.stderr)
+
+
+# Try to import win32 libraries for enhanced Windows support
+try:
+    import win32gui
+    import win32ui
+    import win32con
+    import win32api
+    WIN32_AVAILABLE = True
+    log("Win32 libraries available for enhanced Windows API support")
+except ImportError:
+    WIN32_AVAILABLE = False
+    log("Win32 libraries not available, using basic ctypes approach")
 
 
 def get_downloads_dir() -> Path:
@@ -91,6 +110,302 @@ def save_image_to_downloads(
 
     log(f"Saved image to {filepath}")
     return str(filepath.absolute()), img_bytes
+
+
+def _capture_window_without_activation(window) -> Optional[PILImage.Image]:
+    """Capture a window screenshot without activating it using Windows API.
+    
+    Args:
+        window: PyGetWindow window object
+        
+    Returns:
+        PIL Image object or None if capture fails
+    """
+    if os.name != "nt":  # Only works on Windows
+        return None
+        
+    try:
+        # Get window handle
+        hwnd = window._hWnd
+        log(f"Window handle: {hwnd}")
+        log(f"Window title: {window.title}")
+        log(f"Window position: ({window.left}, {window.top})")
+        log(f"Window minimized: {window.isMinimized}")
+        
+        # Verify window handle is valid
+        if not ctypes.windll.user32.IsWindow(hwnd):
+            log("Invalid window handle")
+            return None
+        
+        # Check if window is minimized
+        if window.isMinimized or window.left == -32000:
+            log("Window is minimized, attempting to restore temporarily")
+            # Get current window state
+            placement = ctypes.create_string_buffer(44)  # WINDOWPLACEMENT size
+            ctypes.windll.user32.GetWindowPlacement(hwnd, placement)
+            
+            # Restore window without activating it
+            ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            import time
+            time.sleep(0.1)  # Give it a moment to restore
+            
+            # Get updated dimensions after restore
+            rect = ctypes.create_string_buffer(16)  # RECT size
+            ctypes.windll.user32.GetWindowRect(hwnd, rect)
+            left, top, right, bottom = ctypes.cast(rect, ctypes.POINTER(ctypes.c_int * 4)).contents
+            width = right - left
+            height = bottom - top
+            log(f"Restored window dimensions: {width}x{height}")
+        else:
+            # Get window dimensions
+            width = window.width
+            height = window.height
+        
+        log(f"Using window dimensions: {width}x{height}")
+        
+        if width <= 0 or height <= 0:
+            log(f"Invalid window dimensions: {width}x{height}")
+            return None
+        
+        # Get device contexts
+        hwndDC = ctypes.windll.user32.GetWindowDC(hwnd)
+        if not hwndDC:
+            log("Failed to get window DC")
+            return None
+            
+        mfcDC = ctypes.windll.gdi32.CreateCompatibleDC(hwndDC)
+        if not mfcDC:
+            log("Failed to create compatible DC")
+            ctypes.windll.user32.ReleaseDC(hwnd, hwndDC)
+            return None
+        
+        # Create bitmap
+        saveBitMap = ctypes.windll.gdi32.CreateCompatibleBitmap(hwndDC, width, height)
+        if not saveBitMap:
+            log("Failed to create compatible bitmap")
+            ctypes.windll.gdi32.DeleteDC(mfcDC)
+            ctypes.windll.user32.ReleaseDC(hwnd, hwndDC)
+            return None
+            
+        # Select bitmap into DC
+        old_bitmap = ctypes.windll.gdi32.SelectObject(mfcDC, saveBitMap)
+        
+        # Try PrintWindow first (works for most windows)
+        result = ctypes.windll.user32.PrintWindow(hwnd, mfcDC, 2)  # PW_CLIENTONLY = 2
+        
+        if not result:
+            log("PrintWindow failed, trying with PW_RENDERFULLCONTENT")
+            result = ctypes.windll.user32.PrintWindow(hwnd, mfcDC, 3)  # PW_RENDERFULLCONTENT = 3
+        
+        if not result:
+            log("PrintWindow failed completely, trying BitBlt")
+            # Fallback to BitBlt (captures from screen)
+            screenDC = ctypes.windll.user32.GetDC(0)  # Get screen DC
+            result = ctypes.windll.gdi32.BitBlt(
+                mfcDC, 0, 0, width, height,
+                screenDC, window.left, window.top,
+                0x00CC0020  # SRCCOPY
+            )
+            ctypes.windll.user32.ReleaseDC(0, screenDC)
+        
+        if result:
+            log("Successfully captured window content")
+            
+            # Define BITMAPINFOHEADER structure
+            class BITMAPINFOHEADER(ctypes.Structure):
+                _fields_ = [
+                    ('biSize', ctypes.c_uint32),
+                    ('biWidth', ctypes.c_int32),
+                    ('biHeight', ctypes.c_int32),
+                    ('biPlanes', ctypes.c_uint16),
+                    ('biBitCount', ctypes.c_uint16),
+                    ('biCompression', ctypes.c_uint32),
+                    ('biSizeImage', ctypes.c_uint32),
+                    ('biXPelsPerMeter', ctypes.c_int32),
+                    ('biYPelsPerMeter', ctypes.c_int32),
+                    ('biClrUsed', ctypes.c_uint32),
+                    ('biClrImportant', ctypes.c_uint32)
+                ]
+            
+            # Create BITMAPINFOHEADER
+            bmi = BITMAPINFOHEADER()
+            bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            bmi.biWidth = width
+            bmi.biHeight = -height  # Negative for top-down bitmap
+            bmi.biPlanes = 1
+            bmi.biBitCount = 32  # 32 bits per pixel (BGRA)
+            bmi.biCompression = 0  # BI_RGB
+            
+            # Create buffer for bitmap data
+            buffer_size = width * height * 4  # 4 bytes per pixel
+            buffer = (ctypes.c_ubyte * buffer_size)()
+            
+            # Get bitmap bits
+            lines_copied = ctypes.windll.gdi32.GetDIBits(
+                mfcDC, saveBitMap, 0, height, buffer, ctypes.byref(bmi), 0  # DIB_RGB_COLORS
+            )
+            
+            if lines_copied == height:
+                log("Successfully retrieved bitmap data")
+                
+                # Convert to numpy array
+                bmp_array = np.frombuffer(buffer, dtype=np.uint8)
+                bmp_array = bmp_array.reshape((height, width, 4))
+                
+                # Convert BGRA to RGB
+                rgb_array = bmp_array[:, :, [2, 1, 0]]  # BGR to RGB, ignore alpha
+                
+                # Create PIL Image
+                image = PILImage.fromarray(rgb_array)
+                
+                # Clean up
+                ctypes.windll.gdi32.SelectObject(mfcDC, old_bitmap)
+                ctypes.windll.gdi32.DeleteObject(saveBitMap)
+                ctypes.windll.gdi32.DeleteDC(mfcDC)
+                ctypes.windll.user32.ReleaseDC(hwnd, hwndDC)
+                
+                # If window was minimized, restore it back to minimized state
+                if window.isMinimized or window.left == -32000:
+                    log("Restoring window back to minimized state")
+                    ctypes.windll.user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+                
+                log(f"Successfully captured window without activation: {window.title}")
+                return image
+            else:
+                log(f"Failed to get bitmap bits, lines copied: {lines_copied}")
+        else:
+            log("Failed to capture window content with all methods")
+            
+    except Exception as e:
+        log(f"Error capturing window without activation: {str(e)}")
+        import traceback
+        log(f"Stack trace: {traceback.format_exc()}")
+    finally:
+        # Clean up in case of error
+        try:
+            if 'old_bitmap' in locals():
+                ctypes.windll.gdi32.SelectObject(mfcDC, old_bitmap)
+            if 'saveBitMap' in locals():
+                ctypes.windll.gdi32.DeleteObject(saveBitMap)
+            if 'mfcDC' in locals():
+                ctypes.windll.gdi32.DeleteDC(mfcDC)
+            if 'hwndDC' in locals():
+                ctypes.windll.user32.ReleaseDC(hwnd, hwndDC)
+        except:
+            pass
+    
+    return None
+
+
+def _capture_window_with_win32(window) -> Optional[PILImage.Image]:
+    """Capture a window screenshot using win32 libraries (enhanced method).
+    
+    Args:
+        window: PyGetWindow window object
+        
+    Returns:
+        PIL Image object or None if capture fails
+    """
+    if not WIN32_AVAILABLE:
+        log("Win32 libraries not available")
+        return None
+        
+    try:
+        hwnd = window._hWnd
+        log(f"Using win32 method for window: {window.title}")
+        
+        # Get window dimensions
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        width = right - left
+        height = bottom - top
+        
+        log(f"Win32 window rect: ({left}, {top}, {right}, {bottom})")
+        log(f"Win32 window dimensions: {width}x{height}")
+        
+        if width <= 0 or height <= 0:
+            log(f"Invalid win32 window dimensions: {width}x{height}")
+            return None
+        
+        # Check if window is minimized and restore temporarily
+        window_placement = win32gui.GetWindowPlacement(hwnd)
+        was_minimized = window_placement[1] == win32con.SW_SHOWMINIMIZED
+        
+        if was_minimized:
+            log("Window is minimized, restoring temporarily for win32 capture")
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            import time
+            time.sleep(0.2)  # Wait for restore
+            
+            # Get updated rect after restore
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            width = right - left
+            height = bottom - top
+            log(f"Updated win32 dimensions after restore: {width}x{height}")
+        
+        # Get device contexts
+        hwndDC = win32gui.GetWindowDC(hwnd)
+        mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+        saveDC = mfcDC.CreateCompatibleDC()
+        
+        # Create bitmap
+        saveBitMap = win32ui.CreateBitmap()
+        saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+        saveDC.SelectObject(saveBitMap)
+        
+        # Copy window content
+        result = ctypes.windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 3)  # PW_RENDERFULLCONTENT
+        
+        if not result:
+            log("Win32 PrintWindow failed, trying BitBlt")
+            result = saveDC.BitBlt((0, 0), (width, height), mfcDC, (0, 0), win32con.SRCCOPY)
+        
+        if result:
+            # Get bitmap info
+            bmpinfo = saveBitMap.GetInfo()
+            bmpstr = saveBitMap.GetBitmapBits(True)
+            
+            # Convert to PIL Image
+            img = PILImage.frombuffer(
+                'RGB',
+                (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
+                bmpstr, 'raw', 'BGRX', 0, 1
+            )
+            
+            # Clean up
+            win32gui.DeleteObject(saveBitMap.GetHandle())
+            saveDC.DeleteDC()
+            mfcDC.DeleteDC()
+            win32gui.ReleaseDC(hwnd, hwndDC)
+            
+            # Restore minimized state if needed
+            if was_minimized:
+                log("Restoring window back to minimized state")
+                win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+            
+            log(f"Successfully captured window with win32: {window.title}")
+            return img
+        else:
+            log("Win32 capture failed")
+            
+    except Exception as e:
+        log(f"Error in win32 capture: {str(e)}")
+        import traceback
+        log(f"Win32 stack trace: {traceback.format_exc()}")
+    finally:
+        # Clean up in case of error
+        try:
+            if 'saveBitMap' in locals():
+                win32gui.DeleteObject(saveBitMap.GetHandle())
+            if 'saveDC' in locals():
+                saveDC.DeleteDC()
+            if 'mfcDC' in locals():
+                mfcDC.DeleteDC()
+            if 'hwndDC' in locals():
+                win32gui.ReleaseDC(hwnd, hwndDC)
+        except:
+            pass
+    
+    return None
 
 
 def _find_matching_window(
@@ -235,21 +550,67 @@ def take_screenshot(
             log("No matching window found, taking screenshot of entire screen")
             screenshot = pyautogui.screenshot()
         else:
-            current_active_window = gw.getActiveWindow()
             log(f"Taking screenshot of window: {window.title}")
-            # Activate the window and wait for it to be fully in focus
-            window.activate()
-            pyautogui.sleep(0.5)  # Wait for 0.5 seconds to ensure window is active
-            screenshot = pyautogui.screenshot(
-                region=(window.left, window.top, window.width, window.height)
-            )
-            # Restore the previously active window
-            if current_active_window:
+            
+            # First try win32 enhanced method (if available)
+            screenshot = None
+            if WIN32_AVAILABLE:
+                log("Attempting to capture window using win32 enhanced method")
+                screenshot = _capture_window_with_win32(window)
+            
+            # If win32 failed, try basic Windows API method
+            if screenshot is None and os.name == "nt":
+                log("Win32 capture failed or unavailable, trying basic Windows API")
+                screenshot = _capture_window_without_activation(window)
+            
+            # If both methods failed or not on Windows, fall back to activation method
+            if screenshot is None:
+                log("All non-activation methods failed or not available, falling back to activation method")
+                current_active_window = gw.getActiveWindow()
+                
+                # Try to activate the window with error handling
                 try:
-                    current_active_window.activate()
-                    pyautogui.sleep(0.2)  # Wait a bit to ensure previous window is restored
-                except Exception as e:
-                    log(f"Error restoring previous window: {str(e)}")
+                    # Check if window is still valid
+                    _ = window.title
+                    _ = window.isActive
+                    
+                    # Activate the window with retry mechanism
+                    max_retries = 3
+                    activation_successful = False
+                    for attempt in range(max_retries):
+                        try:
+                            window.activate()
+                            pyautogui.sleep(0.5)  # Wait for activation
+                            activation_successful = True
+                            break
+                        except Exception as activate_error:
+                            if attempt == max_retries - 1:  # Last attempt
+                                log(f"Failed to activate window after {max_retries} attempts: {str(activate_error)}")
+                                log("Taking screenshot of entire screen instead")
+                                screenshot = pyautogui.screenshot()
+                                break
+                            log(f"Activation attempt {attempt + 1} failed: {str(activate_error)}")
+                            pyautogui.sleep(0.5)  # Wait before retry
+                    
+                    if activation_successful:
+                        screenshot = pyautogui.screenshot(
+                            region=(window.left, window.top, window.width, window.height)
+                        )
+                        
+                except Exception as window_error:
+                    log(f"Window validation failed: {str(window_error)}")
+                    log("Taking screenshot of entire screen instead")
+                    screenshot = pyautogui.screenshot()
+                
+                # Restore the previously active window
+                if current_active_window:
+                    try:
+                        current_active_window.activate()
+                        pyautogui.sleep(0.2)  # Wait a bit to ensure previous window is restored
+                    except Exception as e:
+                        log(f"Error restoring previous window: {str(e)}")
+            else:
+                log("Successfully captured window without activation")
 
         # Create temp directory
         temp_dir = Path(tempfile.mkdtemp())
@@ -358,27 +719,25 @@ def list_windows() -> List[Dict[str, Any]]:
         result = []
         for window in windows:
             if window.title:  # Only include windows with titles
-                result.append(
-                    {
-                        "title": window.title,
-                        "left": window.left,
-                        "top": window.top,
-                        "width": window.width,
-                        "height": window.height,
-                        "is_active": window.isActive,
-                        "is_visible": window.visible,
-                        "is_minimized": window.isMinimized,
-                        "is_maximized": window.isMaximized,
-                        "screenshot": pyautogui.screenshot(
-                            region=(
-                                window.left,
-                                window.top,
-                                window.width,
-                                window.height,
-                            )
-                        ),
-                    }
-                )
+                try:
+                    # Check if window is still valid before accessing properties
+                    result.append(
+                        {
+                            "title": window.title,
+                            "left": window.left,
+                            "top": window.top,
+                            "width": window.width,
+                            "height": window.height,
+                            "is_active": window.isActive,
+                            "is_visible": window.visible,
+                            "is_minimized": window.isMinimized,
+                            "is_maximized": window.isMaximized,
+                            # Removed screenshot to fix serialization issue
+                        }
+                    )
+                except Exception as window_error:
+                    log(f"Error accessing window '{window.title}': {str(window_error)}")
+                    continue
         return result
     except Exception as e:
         log(f"Error listing windows: {str(e)}")
@@ -427,10 +786,31 @@ def activate_window(
         # Get the actual window object
         matched_window = matched_window_dict["window_obj"]
 
-        # Activate the window
-        matched_window.activate()
-
-        return f"Successfully activated window: '{matched_window.title}'"
+        # Check if window is still valid and try to activate it
+        try:
+            # First check if window is still accessible
+            _ = matched_window.title
+            _ = matched_window.isActive
+            
+            # Try to activate the window with retry mechanism
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    matched_window.activate()
+                    pyautogui.sleep(0.2)  # Give time for activation
+                    break
+                except Exception as activate_error:
+                    if attempt == max_retries - 1:  # Last attempt
+                        raise activate_error
+                    log(f"Activation attempt {attempt + 1} failed: {str(activate_error)}")
+                    pyautogui.sleep(0.5)  # Wait before retry
+            
+            return f"Successfully activated window: '{matched_window.title}'"
+            
+        except Exception as window_error:
+            error_msg = f"Cannot activate window '{matched_window_dict.get('title', 'Unknown')}': {str(window_error)}"
+            log(error_msg)
+            return f"Error: {error_msg}"
     except Exception as e:
         log(f"Error activating window: {str(e)}")
         return f"Error activating window: {str(e)}"
