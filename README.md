@@ -42,6 +42,16 @@ Computer Control MCP Lands 是一个基于 Model Context Protocol (MCP) 的服�
 - 窗口查找
 - 模糊匹配
 
+## 📷 效果展示
+
+### 屏幕截图功能
+![屏幕截图示例](./src/img/screenshot_20250806_161631_fda556e4.png)
+
+### OCR文字识别与标注
+![OCR识别效果](./src/img/screenshot_20250806_161631_fda556e4_annotated.png)
+
+*上图展示了OCR文字识别功能，可以准确识别屏幕上的文字并标注边界框*
+
 ## 🚀 快速开始
 
 ### 安装
