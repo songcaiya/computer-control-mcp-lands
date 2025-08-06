@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "computer-control-mcp"
-version = "0.2.7"
+name = "computer-control-mcp-lands"
+version = "0.0.1"
 description = "MCP server that provides computer control capabilities, like mouse, keyboard, OCR, etc. using PyAutoGUI, RapidOCR, ONNXRuntime. Similar to 'computer-use' by Anthropic. With Zero External Dependencies."
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
-    {name = "AB498", email = "abcd49800@gmail.com"},
+    {name = "lands", email = "1158232449@qq.com"},
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -34,9 +34,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/AB498/computer-control-mcp"
-Issues = "https://github.com/AB498/computer-control-mcp/issues"
-Documentation = "https://github.com/AB498/computer-control-mcp#readme"
+Homepage = "https://github.com/songcaiya/computer-control-mcp-lands"
 
 [project.scripts]
 computer-control-mcp = "computer_control_mcp.cli:main"

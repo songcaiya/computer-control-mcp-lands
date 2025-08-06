@@ -1,101 +1,124 @@
-# Computer Control MCP
+# Computer Control MCP Lands
 
-### MCP server that provides computer control capabilities, like mouse, keyboard, OCR, etc. using PyAutoGUI, RapidOCR, ONNXRuntime. Similar to 'computer-use' by Anthropic. With Zero External Dependencies.
+🖥️ **一个强大的计算机控制MCP服务器，提供鼠标、键盘、OCR等计算机控制功能**
 
-* *Only tested on Windows. Should work on other platforms.*
+[![Python Version](https://img.shields.io/badge/python-3.12+-blue.svg)](https://python.org)
+[![PyPI](https://img.shields.io/pypi/v/computer-control-mcp-lands.svg)](https://pypi.org/project/computer-control-mcp-lands/)
 
-<div style="text-align:center;font-family: monospace; display: flex; align-items: center; justify-content: center; width: 100%; gap: 10px">
-        <a href="https://discord.gg/ZeeqSBpjU2"><img src="https://img.shields.io/discord/1095854826786668545" alt="Discord"></a>
-        <a href="https://img.shields.io/badge/License-MIT-yellow.svg"><img
-                src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
-</div>
+## 📖 简介
 
----
+Computer Control MCP Lands 是一个基于 Model Context Protocol (MCP) 的服务器，提供全面的计算机控制功能。它使用 PyAutoGUI、RapidOCR、ONNXRuntime 等技术，类似于 Anthropic 的 'computer-use' 功能，但具有零外部依赖的特点。
 
-![MCP Computer Control Demo](https://github.com/AB498/computer-control-mcp/blob/main/demonstration.gif?raw=true)
+## ✨ 主要功能
 
-## Quick Usage (MCP Setup Using `uvx`)
+### 🖱️ 鼠标控制
+- 鼠标移动和点击
+- 拖拽操作
+- 滚轮控制
+- 多种点击模式（左键、右键、双击）
 
-***Note:** Running `uvx computer-control-mcp@latest` for the first time will download python dependencies (around 70MB) which may take some time. Recommended to run this in a terminal before using it as MCP. Subsequent runs will be instant.* 
+### ⌨️ 键盘控制
+- 文本输入
+- 按键模拟
+- 组合键支持
+- 特殊键处理
+
+### 📸 屏幕截图
+- 全屏截图
+- 窗口截图
+- 区域截图
+- 支持多显示器
+
+### 🔍 OCR文字识别
+- 高精度文字识别
+- 支持中英文
+- 坐标定位
+- 置信度检测
+- 边界框绘制
+
+### 🪟 窗口管理
+- 窗口列表获取
+- 窗口激活
+- 窗口查找
+- 模糊匹配
+
+## 🚀 快速开始
+
+### 安装
+
+```bash
+pip install computer-control-mcp-lands
+```
+
+### 基本使用
+
+#### 作为MCP服务器运行
+
+```bash
+computer-control-mcp-server
+```
+
+#### 作为命令行工具使用
+
+```bash
+computer-control-mcp --help
+```
+
+### 配置示例
+
+在你的MCP客户端配置中添加：
 
 ```json
 {
   "mcpServers": {
-    "computer-control-mcp": {
-      "command": "uvx",
-      "args": ["computer-control-mcp@latest"]
+    "computer-control": {
+      "command": "computer-control-mcp-server",
+      "args": []
     }
   }
 }
 ```
 
-OR install globally with `pip`:
-```bash
-pip install computer-control-mcp
-```
-Then run the server with:
-```bash
-computer-control-mcp # instead of uvx computer-control-mcp, so you can use the latest version, also you can `uv cache clean` to clear the cache and `uvx` again to use latest version.
-```
+## 🛠️ 可用工具
 
-## Features
+### 鼠标操作
+- `click_screen(x, y)` - 点击屏幕指定位置
+- `move_mouse(x, y)` - 移动鼠标到指定位置
+- `drag_mouse(from_x, from_y, to_x, to_y)` - 拖拽鼠标
 
-- Control mouse movements and clicks
-- Type text at the current cursor position
-- Take screenshots of the entire screen or specific windows with optional saving to downloads directory
-- Extract text from screenshots using OCR (Optical Character Recognition)
-- List and activate windows
-- Press keyboard keys
-- Drag and drop operations
+### 键盘操作
+- `type_text(text)` - 输入文本
+- `press_key(key)` - 按下指定按键
 
-## Available Tools
+### 屏幕操作
+- `take_screenshot()` - 截取屏幕
+- `get_screen_size()` - 获取屏幕尺寸
 
-### Mouse Control
-- `click_screen(x: int, y: int)`: Click at specified screen coordinates
-- `move_mouse(x: int, y: int)`: Move mouse cursor to specified coordinates
-- `drag_mouse(from_x: int, from_y: int, to_x: int, to_y: int, duration: float = 0.5)`: Drag mouse from one position to another
+### 窗口管理
+- `list_windows()` - 列出所有窗口
+- `activate_window(title_pattern)` - 激活指定窗口
 
-### Keyboard Control
-- `type_text(text: str)`: Type the specified text at current cursor position
-- `press_key(key: str)`: Press a specified keyboard key
+## 📋 系统要求
 
-### Screen and Window Management
-- `take_screenshot(title_pattern: str = None, use_regex: bool = False, threshold: int = 60, with_ocr_text_and_coords: bool = False, scale_percent_for_ocr: int = 100, save_to_downloads: bool = False)`: Capture screen or window with optional OCR
-- `get_screen_size()`: Get current screen resolution
-- `list_windows()`: List all open windows
-- `activate_window(title_pattern: str, use_regex: bool = False, threshold: int = 60)`: Bring specified window to foreground
+- Python 3.12+
+- Windows
 
-## Development
+## 🔧 依赖项
 
-### Setting up the Development Environment
+- `pyautogui` - 鼠标键盘控制
+- `mcp[cli]` - MCP协议支持
+- `pillow` - 图像处理
+- `pygetwindow` - 窗口管理
+- `fuzzywuzzy` - 模糊匹配
+- `rapidocr` - OCR文字识别
+- `onnxruntime` - AI推理引擎
+- `opencv-python` - 计算机视觉
 
-```bash
-# Clone the repository
-git clone https://github.com/AB498/computer-control-mcp.git
-cd computer-control-mcp
+## 🔒 安全说明
 
-# Install in development mode
-pip install -e .
+此工具具有完整的系统控制权限，请：
+- 仅在受信任的环境中使用
+- 避免在生产系统上运行未经测试的脚本
+- 定期检查和更新依赖项
 
-# Start server
-python -m computer_control_mcp.core
-```
-
-### Running Tests
-
-```bash
-python -m pytest
-```
-
-## API Reference
-
-See the [API Reference](docs/api.md) for detailed information about the available functions and classes.
-
-## License
-
-MIT
-
-## For more information or help
-
-- [Email (abcd49800@gmail.com)](mailto:abcd49800@gmail.com)
-- [Discord (CodePlayground)](https://discord.gg/ZeeqSBpjU2)
+⭐ 如果这个项目对你有帮助，请给它一个星标！
