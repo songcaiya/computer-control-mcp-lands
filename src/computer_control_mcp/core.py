@@ -457,6 +457,182 @@ def _find_matching_window(
     return None
 
 
+def _draw_ocr_bounding_boxes(img, boxes, txts, scores, scale_percent_for_ocr):
+    """
+    Draw bounding boxes around detected text on the image.
+    
+    Args:
+        img: OpenCV image (BGR format)
+        boxes: List of bounding box coordinates (already in original image coordinates)
+        txts: List of detected text strings
+        scores: List of confidence scores
+        scale_percent_for_ocr: Scale factor used for OCR processing
+        
+    Returns:
+        OpenCV image with bounding boxes drawn
+    """
+    # Create a copy of the image to avoid modifying the original
+    annotated_img = img.copy()
+    
+    # Calculate scale factor to convert OCR coordinates back to original image coordinates
+    scale_factor = 100.0 / scale_percent_for_ocr
+    
+    # Load Chinese font for text rendering
+    font_size = 20
+    
+    try:
+        from PIL import Image as PILImage, ImageDraw, ImageFont
+        # Convert OpenCV image to PIL for better text rendering
+        pil_img = PILImage.fromarray(cv2.cvtColor(annotated_img, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img)
+        
+        # Load font - try common Chinese fonts on Windows
+        font = None
+        chinese_fonts = [
+            "C:/Windows/Fonts/simhei.ttf",  # SimHei
+            "C:/Windows/Fonts/simsun.ttc",  # SimSun
+            "C:/Windows/Fonts/msyh.ttc",    # Microsoft YaHei
+            "C:/Windows/Fonts/simkai.ttf",  # SimKai
+        ]
+        
+        for font_path in chinese_fonts:
+            try:
+                if os.path.exists(font_path):
+                    font = ImageFont.truetype(font_path, font_size)
+                    log(f"Using Chinese font: {font_path}")
+                    break
+            except Exception as e:
+                log(f"Failed to load font {font_path}: {e}")
+                continue
+        
+        if font is None:
+            # Fallback to default font if no Chinese font is found
+            font = ImageFont.load_default()
+            log("Using default font - Chinese characters may not display correctly")
+            
+        for i, (box, txt, score) in enumerate(zip(boxes, txts, scores)):
+            # The boxes are already in original image coordinates, but we need to scale them back
+            # because they were processed on the scaled image
+            if scale_percent_for_ocr != 100:
+                # Scale the coordinates back to original image size
+                scaled_box = []
+                for point in box:
+                    scaled_x = int(point[0] * scale_factor)
+                    scaled_y = int(point[1] * scale_factor)
+                    scaled_box.append([scaled_x, scaled_y])
+                box = scaled_box
+            
+            # Get bounding rectangle coordinates
+            x_coords = [int(point[0]) for point in box]
+            y_coords = [int(point[1]) for point in box]
+            x_min, x_max = min(x_coords), max(x_coords)
+            y_min, y_max = min(y_coords), max(y_coords)
+            
+            # Choose color based on confidence score
+            try:
+                score_float = float(score)
+            except (ValueError, TypeError):
+                score_float = 0.0
+                
+            if score_float >= 0.8:
+                color = (0, 255, 0)  # Green for high confidence
+                pil_color = (0, 255, 0)
+            elif score_float >= 0.6:
+                color = (255, 255, 0)  # Yellow for medium confidence  
+                pil_color = (255, 255, 0)
+            else:
+                color = (255, 0, 0)  # Red for low confidence
+                pil_color = (255, 0, 0)
+            
+            # Draw bounding box on PIL image
+            draw.rectangle([x_min, y_min, x_max, y_max], outline=pil_color, width=2)
+            
+            # Add text label with confidence score
+            label = f"{txt} ({score_float:.2f})"
+            
+            # Get text size
+            bbox = draw.textbbox((0, 0), label, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            
+            # Position label above the bounding box, or below if there's no space above
+            label_y = y_min - text_height - 5 if y_min - text_height - 5 > 0 else y_max + 5
+            label_x = x_min
+            
+            # Draw background rectangle for text
+            draw.rectangle([label_x - 2, label_y - 2, label_x + text_width + 2, label_y + text_height + 2], 
+                         fill=pil_color)
+            
+            # Draw text
+            draw.text((label_x, label_y), label, font=font, fill=(255, 255, 255))
+        
+        # Convert back to OpenCV format
+        annotated_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        
+    except ImportError:
+        # Fallback to OpenCV text rendering if PIL is not available
+        log("PIL not available, using OpenCV text rendering (Chinese characters may not display correctly)")
+        
+        for i, (box, txt, score) in enumerate(zip(boxes, txts, scores)):
+            # The boxes are already in original image coordinates, but we need to scale them back
+            if scale_percent_for_ocr != 100:
+                scaled_box = []
+                for point in box:
+                    scaled_x = int(point[0] * scale_factor)
+                    scaled_y = int(point[1] * scale_factor)
+                    scaled_box.append([scaled_x, scaled_y])
+                box = scaled_box
+            
+            # Convert box to numpy array for easier manipulation
+            box_array = np.array(box, dtype=np.int32)
+            
+            # Get bounding rectangle coordinates
+            x_coords = [int(point[0]) for point in box]
+            y_coords = [int(point[1]) for point in box]
+            x_min, x_max = min(x_coords), max(x_coords)
+            y_min, y_max = min(y_coords), max(y_coords)
+            
+            # Choose color based on confidence score
+            try:
+                score_float = float(score)
+            except (ValueError, TypeError):
+                score_float = 0.0
+                
+            if score_float >= 0.8:
+                color = (0, 255, 0)  # Green for high confidence
+            elif score_float >= 0.6:
+                color = (0, 255, 255)  # Yellow for medium confidence
+            else:
+                color = (0, 0, 255)  # Red for low confidence
+            
+            # Draw the bounding box (rectangle)
+            cv2.rectangle(annotated_img, (x_min, y_min), (x_max, y_max), color, 2)
+            
+            # Optionally draw the polygon outline for more precise boundaries
+            cv2.polylines(annotated_img, [box_array], True, color, 1)
+            
+            # Add text label with confidence score (ASCII only for OpenCV)
+            label = f"Text ({score_float:.2f})"  # Use generic label for Chinese text
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+            
+            # Position label above the bounding box, or below if there's no space above
+            label_y = y_min - 10 if y_min - 10 > label_size[1] else y_max + 20
+            label_x = x_min
+            
+            # Draw background rectangle for text
+            cv2.rectangle(annotated_img, 
+                         (label_x, label_y - label_size[1] - 5), 
+                         (label_x + label_size[0] + 5, label_y + 5), 
+                         color, -1)
+            
+            # Draw text
+            cv2.putText(annotated_img, label, (label_x + 2, label_y - 2), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    
+    log(f"Drew {len(boxes)} bounding boxes on image")
+    return annotated_img
+
+
 # --- MCP Function Handlers ---
 
 
@@ -508,6 +684,7 @@ def take_screenshot(
     with_ocr_text_and_coords: bool = False,
     scale_percent_for_ocr: int = 100,
     save_to_downloads: bool = False,
+    draw_bounding_boxes: bool = False,
 ) -> Any:
     """
     Get screenshot and  OCR text with absolute coordinates (returned after adding the window offset from true (0, 0) of screen to the OCR coordinates, so clicking is on-point. Recommended to click in the middle of OCR Box) and confidence from window with the specified title pattern.
@@ -520,6 +697,7 @@ def take_screenshot(
         with_ocr_text_and_coords: If True, get OCR text with absolute coordinates from the screenshot
         scale_percent_for_ocr: Percentage to scale the image down before processing, you wont need this most of the time unless your pc is extremely old or slow
         save_to_downloads: If True, save the screenshot to the downloads directory and return the absolute path
+        draw_bounding_boxes: If True, draw bounding boxes around detected text on the screenshot
 
     Returns:
         Returns a single screenshot as MCP Image object, if with_ocr_text_and_coords is True, returns a MCP Image object followed by list of UI elements as [[4 corners of box], text, confidence], "content type image not supported" means preview isnt supported but Image object is there.
@@ -644,12 +822,38 @@ def take_screenshot(
         engine = RapidOCR()
 
         result, elapse_list = engine(resized_img)
+        
+        # Handle empty OCR results
+        if not result:
+            log("No text detected by OCR")
+            return [image]
+            
         boxes, txts, scores = list(zip(*result))
-        boxes = [
-            [[x + window.left, y + window.top] if window else [x, y] for x, y in box]
-            for box in boxes
-        ]
+        # Don't add window offset - coordinates should be relative to the screenshot image
+        # boxes = [
+        #     [[x + window.left, y + window.top] if window else [x, y] for x, y in box]
+        #     for box in boxes
+        # ]
         zipped_results = list(zip(boxes, txts, scores))
+
+        # Draw bounding boxes if requested
+        if draw_bounding_boxes and result:
+            log("Drawing bounding boxes on screenshot")
+            annotated_img = _draw_ocr_bounding_boxes(img, boxes, txts, scores, scale_percent_for_ocr)
+            
+            # Save the annotated image
+            annotated_filepath = filepath.replace('.png', '_annotated.png')
+            cv2.imwrite(annotated_filepath, annotated_img)
+            
+            # Create new Image object from annotated filepath
+            annotated_image = Image(annotated_filepath)
+            
+            # Copy annotated image to downloads if requested
+            if save_to_downloads:
+                log("Copying annotated screenshot to downloads")
+                shutil.copy(annotated_filepath, get_downloads_dir())
+            
+            return [annotated_image, *zipped_results]
 
         return [image, *zipped_results]
 
